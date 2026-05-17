@@ -37,13 +37,21 @@ export class AuthController {
     return this.authService.forgotPassword(forgotPasswordDto);
   }
 
-  @Post('verify-otp')
+  @Post('verify-email')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Step 2: Verify OTP' })
-  @ApiResponse({ status: 200, description: 'OTP verified' })
+  @ApiOperation({ summary: 'Verify OTP for either Email Verification or Password Reset' })
+  @ApiResponse({ status: 200, description: 'OTP verified (returns token if email verification, or success message if password reset)' })
   @ApiResponse({ status: 400, description: 'Invalid or expired OTP' })
-  verifyOtp(@Body() verifyOtpDto: VerifyOtpDto) {
-    return this.authService.verifyOtp(verifyOtpDto);
+  verifyEmail(@Body() verifyOtpDto: VerifyOtpDto) {
+    return this.authService.verifyEmail(verifyOtpDto);
+  }
+
+  @Post('resend-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resend OTP to email' })
+  @ApiResponse({ status: 200, description: 'New OTP sent to email' })
+  resendOtp(@Body() forgotPasswordDto: ForgotPasswordDto) {
+    return this.authService.resendOtp(forgotPasswordDto);
   }
 
   @Post('reset-password')
