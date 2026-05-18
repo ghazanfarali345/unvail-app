@@ -15,20 +15,24 @@ import { MailerModule } from '@nestjs-modules/mailer';
     }),
     MailerModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        transport: {
-          host: configService.get<string>('MAIL_HOST'),
-          port: configService.get<number>('MAIL_PORT'),
-          secure: configService.get<number>('MAIL_PORT') === 465, // usually false for 587
-          auth: {
-            user: configService.get<string>('MAIL_USER'),
-            pass: configService.get<string>('MAIL_PASSWORD'),
+      useFactory: (configService: ConfigService) => {
+        const mailHost = configService.get<string>('MAIL_HOST');
+        console.log(`[CONFIG DIAGNOSTIC] MAIL_HOST loaded from environment: "${mailHost}"`);
+        return {
+          transport: {
+            host: mailHost,
+            port: configService.get<number>('MAIL_PORT'),
+            secure: configService.get<number>('MAIL_PORT') === 465, // usually false for 587
+            auth: {
+              user: configService.get<string>('MAIL_USER'),
+              pass: configService.get<string>('MAIL_PASSWORD'),
+            },
           },
-        },
-        defaults: {
-          from: `"${configService.get<string>('MAIL_NAME')}" <${configService.get<string>('MAIL_FROM')}>`,
-        },
-      }),
+          defaults: {
+            from: `"${configService.get<string>('MAIL_NAME')}" <${configService.get<string>('MAIL_FROM')}>`,
+          },
+        };
+      },
     }),
     DatabaseModule,
     AuthModule,

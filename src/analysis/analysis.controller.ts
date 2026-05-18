@@ -1,11 +1,14 @@
-import { Controller, Post, Body, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Post, Body, UseInterceptors, UploadedFile, UseGuards } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiOperation, ApiResponse, ApiConsumes } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBearerAuth } from '@nestjs/swagger';
 import { AnalysisService } from './analysis.service';
 import { AnalyzeChatDto } from './dto/analyze-chat.dto';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Express } from 'express';
 
 @ApiTags('Analysis')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard)
 @Controller('analysis')
 export class AnalysisController {
   constructor(private readonly analysisService: AnalysisService) {}
@@ -21,6 +24,6 @@ export class AnalysisController {
   ) {
     // Note: 'image' is extracted via the FileInterceptor. 
     // The dto validation handles 'text'.
-    return this.analysisService.analyzeChat(analyzeChatDto);
+    return this.analysisService.analyzeChat(analyzeChatDto, image);
   }
 }
