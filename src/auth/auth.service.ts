@@ -28,8 +28,38 @@ export class AuthService {
     const { email, password, firstName, lastName, phone } = signupDto;
 
     const userExists = await this.userModel.findOne({ email });
-    if (userExists) {
+    
+    // If user exists and email is verified, they already have a complete account
+    if (userExists && userExists.isActive) {
       throw new ConflictException('User with this email already exists');
+    }
+
+    // If user exists but email is not verified, resend OTP
+    if (userExists && !userExists.isActive) {
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const hashedOtp = await bcrypt.hash(otp, 10);
+
+      userExists.otpCode = hashedOtp;
+      userExists.otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      userExists.otpVerified = false;
+      await userExists.save();
+
+      try {
+        await this.mailerService.sendMail({
+          to: email,
+          subject: 'Verify Your Email - Unveil App',
+          text: `Your email verification OTP is: ${otp}. It is valid for 10 minutes.`,
+          html: `<p>Your email verification OTP is: <strong>${otp}</strong>. It is valid for 10 minutes.</p>`,
+        });
+        console.log(`Verification OTP resent to ${email}`);
+      } catch (error) {
+        console.error(`Failed to send verification email to ${email}:`, error);
+      }
+
+      return { 
+        message: 'An account with this email exists but is not verified. Please check your email for the verification OTP.',
+        otp: process.env.NODE_ENV !== 'production' ? otp : undefined,
+      };
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);

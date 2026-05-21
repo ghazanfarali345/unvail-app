@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AnalyzeChatDto } from './dto/analyze-chat.dto';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -26,8 +26,7 @@ export class AnalysisService {
 
     const apiKey = this.configService.get<string>('GEMINI_API_KEY');
     if (!apiKey) {
-      console.warn('GEMINI_API_KEY not found in environment. Falling back to static response.');
-      return this.getStaticFallback();
+      throw new InternalServerErrorException('Gemini API key is not configured. Please set GEMINI_API_KEY environment variable.');
     }
 
     try {
@@ -81,79 +80,28 @@ Analyze the following chat log and identify the names of the two participants:
 
       const responseText = result.response.text();
       return JSON.parse(responseText);
-    } catch (error) {
-      console.error('Gemini Analysis failed, falling back to static response:', error);
-      return this.getStaticFallback();
+    } catch (error: any) {
+      console.error('Gemini API analysis error:', error);
+      
+      if (error instanceof SyntaxError) {
+        throw new InternalServerErrorException('Failed to parse Gemini API response. The response was not valid JSON.');
+      }
+      
+      if (error.status === 429) {
+        throw new InternalServerErrorException('Gemini API rate limit exceeded. Please try again later.');
+      }
+      
+      if (error.status === 401 || error.status === 403) {
+        throw new InternalServerErrorException('Gemini API authentication failed. Invalid or expired API key.');
+      }
+      
+      if (error.status >= 500) {
+        throw new InternalServerErrorException('Gemini API server error. Please try again later.');
+      }
+      
+      throw new InternalServerErrorException(
+        error.message || 'Failed to analyze chat with Gemini API. Please try again later.'
+      );
     }
-  }
-
-  private getStaticFallback() {
-    const score = Math.floor(Math.random() * 16) + 80; // 80 - 95
-    const stabilityIndex = Math.floor(Math.random() * 16) + 75; // 75 - 90
-
-    const adjectivePool = [
-      'Constructive Organizer',
-      'Empathetic Listener',
-      'Proactive Collaborator',
-      'Logical Thinker',
-      'Affectionate Supporter',
-      'Harmonious Mediator',
-      'Strategic Visionary',
-      'Compassionate Guide',
-      'Playful Companion',
-      'Resilient Anchor',
-    ];
-
-    // Shuffle adjectives and pick unique ones for each user
-    const shuffledAdjectives = [...adjectivePool].sort(() => 0.5 - Math.random());
-    const user1Adjectives = [shuffledAdjectives[0], shuffledAdjectives[1]];
-    const user2Adjectives = [shuffledAdjectives[2], shuffledAdjectives[3]];
-
-    const pathPool = [
-      {
-        title: 'Path of Mutual Understanding',
-        description: 'Focus on shared goals to strengthen your foundational bond and deepen mutual trust.',
-      },
-      {
-        title: 'Path of Emotional Growth',
-        description: 'Develop deeper empathy through active listening and open communication during conflicts.',
-      },
-      {
-        title: 'Path of Dynamic Synergy',
-        description: 'Balance each other\'s strengths by allowing your constructive organization to pair with their proactive collaboration.',
-      },
-      {
-        title: 'Path of Shared Adventure',
-        description: 'Introduce new activities and spontaneous plans to keep the spark alive and cultivate shared joy.',
-      },
-      {
-        title: 'Path of Resilient Anchoring',
-        description: 'Create safe spaces to express vulnerability, establishing a stronger emotional safety net.',
-      },
-      {
-        title: 'Path of Quiet Connections',
-        description: 'Appreciate non-verbal connections and silent moments of closeness to build a peaceful rhythm together.',
-      },
-    ];
-
-    // Shuffle paths and pick 3 unique ones
-    const shuffledPaths = [...pathPool].sort(() => 0.5 - Math.random());
-    const selectedPaths = [shuffledPaths[0], shuffledPaths[1], shuffledPaths[2]];
-
-    return {
-      score,
-      stabilityIndex,
-      personalities: {
-        user1: {
-          name: 'User 1',
-          adjectives: user1Adjectives,
-        },
-        user2: {
-          name: 'User 2',
-          adjectives: user2Adjectives,
-        },
-      },
-      unveiledPaths: selectedPaths,
-    };
   }
 }
