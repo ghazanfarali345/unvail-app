@@ -1,11 +1,31 @@
-import { Injectable, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AnalyzeChatDto, AnalysisReport } from './dto/analyze-chat.dto';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import {
+  AnalysisHistory,
+  AnalysisHistoryDocument,
+} from './schemas/analysis-history.schema';
+import {
+  AnalysisSettings,
+  AnalysisSettingsDocument,
+} from './schemas/analysis-settings.schema';
 
 @Injectable()
 export class AnalysisService {
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectModel(AnalysisHistory.name)
+    private readonly historyModel: Model<AnalysisHistoryDocument>,
+    @InjectModel(AnalysisSettings.name)
+    private readonly settingsModel: Model<AnalysisSettingsDocument>,
+  ) {}
 
   private fileToGenerativePart(buffer: Buffer, mimeType: string) {
     return {
@@ -16,17 +36,25 @@ export class AnalysisService {
     };
   }
 
-  async analyzeChat(analyzeChatDto: AnalyzeChatDto, image?: any): Promise<AnalysisReport> {
+  async analyzeChat(
+    analyzeChatDto: AnalyzeChatDto,
+    image?: any,
+    userId?: string,
+  ): Promise<AnalysisReport> {
     const { text } = analyzeChatDto;
 
     // Validate that at least one of text or image is provided
     if (!text && (!image || !image.buffer)) {
-      throw new BadRequestException('Please provide either text or a screenshot image of the chat to analyze.');
+      throw new BadRequestException(
+        'Please provide either text or a screenshot image of the chat to analyze.',
+      );
     }
 
     const apiKey = this.configService.get<string>('GEMINI_API_KEY');
     if (!apiKey) {
-      throw new InternalServerErrorException('Gemini API key is not configured. Please set GEMINI_API_KEY environment variable.');
+      throw new InternalServerErrorException(
+        'Gemini API key is not configured. Please set GEMINI_API_KEY environment variable.',
+      );
     }
 
     try {
@@ -109,7 +137,7 @@ Guidelines:
 `;
 
       const parts: any[] = [{ text: prompt }];
-      
+
       // Add image if provided
       if (image && image.buffer) {
         parts.push(this.fileToGenerativePart(image.buffer, image.mimetype));
@@ -124,42 +152,213 @@ Guidelines:
 
       const responseText = result.response.text();
       const analysis = JSON.parse(responseText);
-      
+
       // Validate the response structure
       if (!analysis.relationshipHealthScore || !analysis.rolesAndTendencies) {
-        throw new InternalServerErrorException('Invalid analysis response structure from Gemini API.');
+        throw new InternalServerErrorException(
+          'Invalid analysis response structure from Gemini API.',
+        );
       }
 
       // Ensure totalScore is calculated correctly
       if (!analysis.relationshipHealthScore.totalScore) {
-        analysis.relationshipHealthScore.totalScore = 
+        analysis.relationshipHealthScore.totalScore =
           (analysis.relationshipHealthScore.positiveMarkersScore || 0) +
           (analysis.relationshipHealthScore.negativeMarkersScore || 0) +
           (analysis.relationshipHealthScore.conflictInsightsScore || 0) +
           (analysis.relationshipHealthScore.rolesTendenciesScore || 0);
       }
 
-      return analysis as AnalysisReport;
+      const report = analysis as AnalysisReport;
+
+      // Attempt to save history if enabled for this user (include source text)
+      if (userId) {
+        try {
+          await this.saveAnalysisHistory(userId, report, text);
+        } catch (e) {
+          // don't fail the analysis if saving history fails
+          console.warn('Failed to save analysis history:', e);
+        }
+      }
+
+      return report;
     } catch (error: any) {
       console.error('Gemini API analysis error:', error);
-      
+
       if (error instanceof SyntaxError) {
-        throw new InternalServerErrorException('Failed to parse Gemini API response. The response was not valid JSON.');
+        throw new InternalServerErrorException(
+          'Failed to parse Gemini API response. The response was not valid JSON.',
+        );
       }
-      
+
       if (error.status === 429) {
-        throw new InternalServerErrorException('Gemini API rate limit exceeded. Please try again later.');
+        throw new InternalServerErrorException(
+          'Gemini API rate limit exceeded. Please try again later.',
+        );
       }
-      
+
       if (error.status === 401 || error.status === 403) {
-        throw new InternalServerErrorException('Gemini API authentication failed. Invalid or expired API key.');
+        throw new InternalServerErrorException(
+          'Gemini API authentication failed. Invalid or expired API key.',
+        );
       }
-      
+
       if (error.status >= 500) {
-        throw new InternalServerErrorException('Gemini API server error. Please try again later.');
+        throw new InternalServerErrorException(
+          'Gemini API server error. Please try again later.',
+        );
       }
-      
-      throw new InternalServerErrorException('An error occurred during chat analysis. Please try again.');
+
+      throw new InternalServerErrorException(
+        'An error occurred during chat analysis. Please try again.',
+      );
     }
+  }
+
+  private async saveAnalysisHistory(
+    userId: string | Types.ObjectId,
+    report: AnalysisReport,
+    sourceText?: string,
+  ) {
+    const uid =
+      typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    const settings = await this.settingsModel.findOne({ user: uid }).lean();
+    if (settings && settings.saveHistory === false) return;
+
+    const totalScore = report?.relationshipHealthScore?.totalScore;
+
+    const resultText = this.formatReportText(report);
+
+    const created = await this.historyModel.create({ user: uid, report, totalScore, sourceText, resultText });
+
+    // If push notifications are enabled for this user, send a push (placeholder implementation)
+    if (settings?.pushEnabled) {
+      try {
+        await this.sendPushNotification(uid, {
+          title: 'Analysis Complete',
+          body: `Your latest analysis score: ${totalScore}`,
+          data: { score: totalScore, id: created._id?.toString?.() },
+        });
+      } catch (e) {
+        console.warn('Push notification failed:', e);
+      }
+    }
+  }
+
+  async setPushNotif(userId: string | Types.ObjectId, pushEnabled: boolean) {
+    const uid = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    const res = await this.settingsModel.findOneAndUpdate(
+      { user: uid },
+      { $set: { pushEnabled } },
+      { upsert: true, new: true },
+    );
+    return { ok: true, settings: res };
+  }
+
+  private async sendPushNotification(userId: Types.ObjectId, payload: { title: string; body: string; data?: any }) {
+    // Placeholder: integrate with real push service (FCM, OneSignal, etc.) here.
+    // For now just log the payload. This ensures places that call push are guarded by settings.
+    console.log('SendPushNotification', userId.toString(), payload);
+    return Promise.resolve(true);
+  }
+
+  private formatReportText(report: AnalysisReport) {
+    if (!report) return '';
+    const score = report.relationshipHealthScore?.totalScore ?? null;
+    const roles = (report.rolesAndTendencies || []).map(r => `${r.person}: ${r.communicationStyle}`).join(' | ');
+    const positives = (report.positiveMarkers || []).slice(0,3).map(m => m.title).join(', ');
+    const negatives = (report.negativeMarkers || []).slice(0,3).map(m => m.title).join(', ');
+    const tips = (report.improvementTips || []).slice(0,5).join(' ');
+
+    return `Score: ${score}. Roles: ${roles}. Positives: ${positives}. Negatives: ${negatives}. Tips: ${tips}`;
+  }
+
+  async setAverageDays(userId: string | Types.ObjectId, averageDays: number) {
+    const uid = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    const res = await this.settingsModel.findOneAndUpdate(
+      { user: uid },
+      { $set: { averageDays } },
+      { upsert: true, new: true },
+    );
+    return { ok: true, settings: res };
+  }
+
+  async getDashboard(userId: string | Types.ObjectId) {
+    const uid = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+
+    const settings = await this.settingsModel.findOne({ user: uid }).lean();
+    const days = settings?.averageDays ?? 7;
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+
+    const records = await this.historyModel.find({ user: uid, createdAt: { $gte: cutoff } }).lean();
+
+    const scores = records.map((r) => (typeof r.totalScore === 'number' ? r.totalScore : undefined)).filter(s => typeof s === 'number') as number[];
+    const averageScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+
+    const last = await this.historyModel.findOne({ user: uid }).sort({ createdAt: -1 }).lean();
+
+    return {
+      averageDays: days,
+      averageScore,
+      lastAnalysisText: last?.resultText ?? null,
+      lastAnalysisAt: last?.createdAt ?? null,
+    };
+  }
+
+  async getHistory(userId: string | Types.ObjectId, filter: string) {
+    const uid =
+      typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+
+    switch (filter) {
+      case 'Latest':
+        return this.historyModel
+          .findOne({ user: uid })
+          .sort({ createdAt: -1 })
+          .lean();
+      case 'High':
+        return this.historyModel
+          .find({ user: uid, totalScore: { $gte: 75 } })
+          .sort({ createdAt: -1 })
+          .lean();
+      case 'Low':
+        return this.historyModel
+          .find({ user: uid, totalScore: { $lte: 40 } })
+          .sort({ createdAt: -1 })
+          .lean();
+      case 'All':
+      default:
+        return this.historyModel
+          .find({ user: uid })
+          .sort({ createdAt: -1 })
+          .lean();
+    }
+  }
+
+  async deleteHistory(userId: string | Types.ObjectId, id?: string) {
+    const uid =
+      typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    if (id) {
+      const oid = new Types.ObjectId(id);
+      return this.historyModel.deleteOne({ _id: oid, user: uid });
+    }
+    return this.historyModel.deleteMany({ user: uid });
+  }
+
+  async deleteAllHistory(userId: string | Types.ObjectId) {
+    const uid = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    return this.historyModel.deleteMany({ user: uid });
+  }
+
+  async setSaveHistory(userId: string | Types.ObjectId, saveHistory: boolean) {
+    const uid =
+      typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    const res = await this.settingsModel.findOneAndUpdate(
+      { user: uid },
+      { $set: { saveHistory } },
+      { upsert: true, new: true },
+    );
+    return { ok: true, settings: res };
   }
 }
