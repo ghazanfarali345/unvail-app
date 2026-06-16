@@ -60,8 +60,15 @@ export class AnalysisController {
     summary:
       'Get analysis history with optional filter (All, Latest, High, Low)',
   })
-  @ApiQuery({ name: 'filter', required: false, enum: ['All', 'Latest', 'High', 'Low'] })
-  @ApiResponse({ status: 200, description: 'Returns analysis history list or filtered results' })
+  @ApiQuery({
+    name: 'filter',
+    required: false,
+    enum: ['All', 'Latest', 'High', 'Low'],
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns analysis history list or filtered results',
+  })
   async getHistory(@GetUser() user: any, @Query() filterDto: HistoryFilterDto) {
     return this.analysisService.getHistory(user._id, filterDto.filter || 'All');
   }
@@ -71,14 +78,20 @@ export class AnalysisController {
     summary:
       'Delete analysis history for user. Optional query param `id` to delete specific record.',
   })
-  @ApiQuery({ name: 'id', required: false, description: 'Optional history record id to delete' })
+  @ApiQuery({
+    name: 'id',
+    required: false,
+    description: 'Optional history record id to delete',
+  })
   @ApiResponse({ status: 200, description: 'Deletion result' })
   async deleteHistory(@GetUser() user: any, @Query('id') id?: string) {
     return this.analysisService.deleteHistory(user._id, id);
   }
 
   @Delete('history/all')
-  @ApiOperation({ summary: 'Delete all analysis history for the authenticated user' })
+  @ApiOperation({
+    summary: 'Delete all analysis history for the authenticated user',
+  })
   @ApiResponse({ status: 200, description: 'All history deleted for the user' })
   async deleteAllHistory(@GetUser() user: any) {
     return this.analysisService.deleteAllHistory(user._id);
@@ -94,7 +107,9 @@ export class AnalysisController {
   }
 
   @Post('config/average-days')
-  @ApiOperation({ summary: 'Set number of days used to compute dashboard average' })
+  @ApiOperation({
+    summary: 'Set number of days used to compute dashboard average',
+  })
   @ApiResponse({
     status: 200,
     description: 'Updated averageDays setting',
@@ -108,24 +123,44 @@ export class AnalysisController {
           retentionDays: 30,
           averageDays: 7,
           createdAt: '2026-06-12T00:00:00.000Z',
-          updatedAt: '2026-06-12T00:00:00.000Z'
-        }
-      }
-    }
+          updatedAt: '2026-06-12T00:00:00.000Z',
+        },
+      },
+    },
   })
   async setAverageDays(@GetUser() user: any, @Body() dto: AverageDaysDto) {
     return this.analysisService.setAverageDays(user._id, dto.averageDays);
   }
 
+  @Get('config/average-days')
+  @ApiOperation({
+    summary: 'Get number of days used to compute dashboard average',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Current averageDays setting',
+    schema: { example: { ok: true, averageDays: 7 } },
+  })
+  async getAverageDays(@GetUser() user: any) {
+    return this.analysisService.getAverageDays(user._id);
+  }
+
   @Post('config/push-notif')
-  @ApiOperation({ summary: 'Enable or disable push notifications for analysis results' })
-  @ApiResponse({ status: 200, description: 'Updated push notification setting' })
+  @ApiOperation({
+    summary: 'Enable or disable push notifications for analysis results',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Updated push notification setting',
+  })
   async setPushNotif(@GetUser() user: any, @Body() dto: PushNotifDto) {
     return this.analysisService.setPushNotif(user._id, dto.pushEnabled);
   }
 
   @Get('dashboard')
-  @ApiOperation({ summary: 'Get dashboard summary: average score and last analysis text' })
+  @ApiOperation({
+    summary: 'Get dashboard summary: average score and last analysis text',
+  })
   @ApiResponse({
     status: 200,
     description: 'Dashboard data including averageScore and lastAnalysisText',
@@ -134,9 +169,9 @@ export class AnalysisController {
         averageDays: 7,
         averageScore: 78.25,
         lastAnalysisText: "Hey, I'm worried about our communication lately...",
-        lastAnalysisAt: '2026-06-12T12:34:56.000Z'
-      }
-    }
+        lastAnalysisAt: '2026-06-12T12:34:56.000Z',
+      },
+    },
   })
   async getDashboard(@GetUser() user: any) {
     return this.analysisService.getDashboard(user._id);

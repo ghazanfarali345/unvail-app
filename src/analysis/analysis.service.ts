@@ -229,7 +229,13 @@ Guidelines:
 
     const resultText = this.formatReportText(report);
 
-    const created = await this.historyModel.create({ user: uid, report, totalScore, sourceText, resultText });
+    const created = await this.historyModel.create({
+      user: uid,
+      report,
+      totalScore,
+      sourceText,
+      resultText,
+    });
 
     // If push notifications are enabled for this user, send a push (placeholder implementation)
     if (settings?.pushEnabled) {
@@ -246,7 +252,8 @@ Guidelines:
   }
 
   async setPushNotif(userId: string | Types.ObjectId, pushEnabled: boolean) {
-    const uid = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    const uid =
+      typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
     const res = await this.settingsModel.findOneAndUpdate(
       { user: uid },
       { $set: { pushEnabled } },
@@ -255,7 +262,10 @@ Guidelines:
     return { ok: true, settings: res };
   }
 
-  private async sendPushNotification(userId: Types.ObjectId, payload: { title: string; body: string; data?: any }) {
+  private async sendPushNotification(
+    userId: Types.ObjectId,
+    payload: { title: string; body: string; data?: any },
+  ) {
     // Placeholder: integrate with real push service (FCM, OneSignal, etc.) here.
     // For now just log the payload. This ensures places that call push are guarded by settings.
     console.log('SendPushNotification', userId.toString(), payload);
@@ -265,16 +275,25 @@ Guidelines:
   private formatReportText(report: AnalysisReport) {
     if (!report) return '';
     const score = report.relationshipHealthScore?.totalScore ?? null;
-    const roles = (report.rolesAndTendencies || []).map(r => `${r.person}: ${r.communicationStyle}`).join(' | ');
-    const positives = (report.positiveMarkers || []).slice(0,3).map(m => m.title).join(', ');
-    const negatives = (report.negativeMarkers || []).slice(0,3).map(m => m.title).join(', ');
-    const tips = (report.improvementTips || []).slice(0,5).join(' ');
+    const roles = (report.rolesAndTendencies || [])
+      .map((r) => `${r.person}: ${r.communicationStyle}`)
+      .join(' | ');
+    const positives = (report.positiveMarkers || [])
+      .slice(0, 3)
+      .map((m) => m.title)
+      .join(', ');
+    const negatives = (report.negativeMarkers || [])
+      .slice(0, 3)
+      .map((m) => m.title)
+      .join(', ');
+    const tips = (report.improvementTips || []).slice(0, 5).join(' ');
 
     return `Score: ${score}. Roles: ${roles}. Positives: ${positives}. Negatives: ${negatives}. Tips: ${tips}`;
   }
 
   async setAverageDays(userId: string | Types.ObjectId, averageDays: number) {
-    const uid = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    const uid =
+      typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
     const res = await this.settingsModel.findOneAndUpdate(
       { user: uid },
       { $set: { averageDays } },
@@ -283,21 +302,39 @@ Guidelines:
     return { ok: true, settings: res };
   }
 
+  async getAverageDays(userId: string | Types.ObjectId) {
+    const uid =
+      typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    const settings = await this.settingsModel.findOne({ user: uid }).lean();
+    const averageDays = settings?.averageDays ?? 7;
+    return { averageDays };
+  }
+
   async getDashboard(userId: string | Types.ObjectId) {
-    const uid = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    const uid =
+      typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
 
     const settings = await this.settingsModel.findOne({ user: uid }).lean();
-    const days = settings?.averageDays ?? 7;
+    const days = settings?.averageDays ?? 30;
 
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - days);
 
-    const records = await this.historyModel.find({ user: uid, createdAt: { $gte: cutoff } }).lean();
+    const records = await this.historyModel
+      .find({ user: uid, createdAt: { $gte: cutoff } })
+      .lean();
 
-    const scores = records.map((r) => (typeof r.totalScore === 'number' ? r.totalScore : undefined)).filter(s => typeof s === 'number') as number[];
-    const averageScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+    const scores = records
+      .map((r) => (typeof r.totalScore === 'number' ? r.totalScore : undefined))
+      .filter((s) => typeof s === 'number') as number[];
+    const averageScore = scores.length
+      ? scores.reduce((a, b) => a + b, 0) / scores.length
+      : null;
 
-    const last = await this.historyModel.findOne({ user: uid }).sort({ createdAt: -1 }).lean();
+    const last = await this.historyModel
+      .findOne({ user: uid })
+      .sort({ createdAt: -1 })
+      .lean();
 
     return {
       averageDays: days,
@@ -312,21 +349,28 @@ Guidelines:
       typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
 
     switch (filter) {
+      // Show all records sorted by newest first
       case 'Latest':
         return this.historyModel
-          .findOne({ user: uid })
+          .find({ user: uid })
           .sort({ createdAt: -1 })
           .lean();
+
+      // Sort by totalScore high -> low, then newest first
       case 'High':
         return this.historyModel
-          .find({ user: uid, totalScore: { $gte: 75 } })
-          .sort({ createdAt: -1 })
+          .find({ user: uid })
+          .sort({ totalScore: -1, createdAt: -1 })
           .lean();
+
+      // Sort by totalScore low -> high, then newest first
       case 'Low':
         return this.historyModel
-          .find({ user: uid, totalScore: { $lte: 40 } })
-          .sort({ createdAt: -1 })
+          .find({ user: uid })
+          .sort({ totalScore: 1, createdAt: -1 })
           .lean();
+
+      // Default: return all records newest first
       case 'All':
       default:
         return this.historyModel
@@ -347,7 +391,8 @@ Guidelines:
   }
 
   async deleteAllHistory(userId: string | Types.ObjectId) {
-    const uid = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    const uid =
+      typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
     return this.historyModel.deleteMany({ user: uid });
   }
 
