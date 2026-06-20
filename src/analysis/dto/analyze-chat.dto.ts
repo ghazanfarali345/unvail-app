@@ -2,21 +2,22 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString } from 'class-validator';
 
 export class AnalyzeChatDto {
-  @ApiPropertyOptional({ 
+  @ApiPropertyOptional({
     description: 'Text content of the chat conversation',
-    example: 'Person A: Hello, how are you?\nPerson B: I am doing well...'
+    example: 'Person A: Hello, how are you?\nPerson B: I am doing well...',
   })
   @IsOptional()
   @IsString()
   text?: string;
 
-  @ApiPropertyOptional({ 
-    type: 'string', 
-    format: 'binary', 
-    description: 'Screenshot image file of the chat (JPG, PNG, WebP, GIF). The AI will extract and analyze the conversation from the image.'
+  @ApiPropertyOptional({
+    type: 'array',
+    items: { type: 'string', format: 'binary' },
+    description:
+      'Screenshot image files of the chat (JPG, PNG, WebP, GIF). Up to 4 images can be provided. The AI will extract and analyze the conversation from the images.',
   })
   @IsOptional()
-  image?: any;
+  images?: any[];
 }
 
 export class RoleAndTendency {

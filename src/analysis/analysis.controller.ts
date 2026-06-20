@@ -3,18 +3,19 @@ import {
   Post,
   Body,
   UseInterceptors,
-  UploadedFile,
+  UploadedFiles,
   UseGuards,
   Get,
   Query,
   Delete,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FilesInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiConsumes,
+  ApiBody,
   ApiBearerAuth,
   ApiQuery,
 } from '@nestjs/swagger';
@@ -41,7 +42,20 @@ export class AnalysisController {
       'Analyze couple chat conversation and generate relationship health report',
   })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('image'))
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string' },
+        images: {
+          type: 'array',
+          items: { type: 'string', format: 'binary' },
+          maxItems: 4,
+        },
+      },
+    },
+  })
+  @UseInterceptors(FilesInterceptor('images', 4))
   @ApiResponse({
     status: 200,
     description:
@@ -50,9 +64,9 @@ export class AnalysisController {
   async analyzeChat(
     @GetUser() user: any,
     @Body() analyzeChatDto: AnalyzeChatDto,
-    @UploadedFile() image?: Express.Multer.File,
+    @UploadedFiles() images?: Express.Multer.File[],
   ): Promise<AnalysisReport> {
-    return this.analysisService.analyzeChat(analyzeChatDto, image, user._id);
+    return this.analysisService.analyzeChat(analyzeChatDto, images, user._id);
   }
 
   @Get('history')

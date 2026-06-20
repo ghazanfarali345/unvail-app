@@ -38,15 +38,17 @@ export class AnalysisService {
 
   async analyzeChat(
     analyzeChatDto: AnalyzeChatDto,
-    image?: any,
+    images?: any[],
     userId?: string,
   ): Promise<AnalysisReport> {
     const { text } = analyzeChatDto;
 
-    // Validate that at least one of text or image is provided
-    if (!text && (!image || !image.buffer)) {
+    // Validate that at least one of text or an image is provided
+    const hasValidImage =
+      images && images.length && images.some((img) => img && img.buffer);
+    if (!text && !hasValidImage) {
       throw new BadRequestException(
-        'Please provide either text or a screenshot image of the chat to analyze.',
+        'Please provide either text or at least one screenshot image of the chat to analyze.',
       );
     }
 
@@ -138,9 +140,13 @@ Guidelines:
 
       const parts: any[] = [{ text: prompt }];
 
-      // Add image if provided
-      if (image && image.buffer) {
-        parts.push(this.fileToGenerativePart(image.buffer, image.mimetype));
+      // Add images if provided (up to 4 handled by controller)
+      if (images && images.length) {
+        for (const img of images) {
+          if (img && img.buffer) {
+            parts.push(this.fileToGenerativePart(img.buffer, img.mimetype));
+          }
+        }
       }
 
       const result = await model.generateContent({
