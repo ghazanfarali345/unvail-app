@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AnalyzeChatDto, AnalysisReport } from './dto/analyze-chat.dto';
+import { ReanalyzeDto } from './dto/reanalyze.dto';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -176,6 +177,8 @@ Guidelines:
       }
 
       const report = analysis as AnalysisReport;
+      // mark this report as a comparison reanalysis
+      report.isComparison = true;
 
       // Attempt to save history if enabled for this user (include source text)
       if (userId) {
@@ -217,6 +220,184 @@ Guidelines:
 
       throw new InternalServerErrorException(
         'An error occurred during chat analysis. Please try again.',
+      );
+    }
+  }
+
+  async reanalyzeChat(
+    reanalyzeDto: ReanalyzeDto,
+    images?: any[],
+    userId?: string,
+  ): Promise<AnalysisReport> {
+    const { text, historyId } = reanalyzeDto;
+
+    // Validate input
+    const hasValidImage =
+      images && images.length && images.some((img) => img && img.buffer);
+    if (!text && !hasValidImage) {
+      throw new BadRequestException(
+        'Please provide either text or at least one screenshot image of the chat to analyze.',
+      );
+    }
+
+    if (!historyId) {
+      throw new BadRequestException('historyId is required for reanalysis.');
+    }
+
+    const apiKey = this.configService.get<string>('GEMINI_API_KEY');
+    if (!apiKey) {
+      throw new InternalServerErrorException(
+        'Gemini API key is not configured. Please set GEMINI_API_KEY environment variable.',
+      );
+    }
+
+    try {
+      const uid =
+        typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+
+      // Fetch existing history record to compare against
+      const existing = await this.historyModel.findOne({
+        _id: new Types.ObjectId(historyId),
+        user: uid,
+      });
+      if (!existing) {
+        throw new BadRequestException('Existing history record not found.');
+      }
+
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+      const comparisonInstruction = `
+You are performing a comparison re-analysis. Below is the prior analysis JSON for the earlier conversation. Compare the new conversation (provided as text or images) with the prior analysis and produce an updated analysis REPORT using the exact same 6-section JSON schema as before. Be sure to reflect any differences in scores, markers, conflict insights, roles/tendencies, and tips. Do NOT add any extra fields. Return ONLY valid JSON exactly matching the AnalysisReport schema.
+
+Previous analysis JSON:
+${JSON.stringify(existing.report || {})}
+`;
+
+      const prompt = `
+You are an expert relationship communication analyzer. Your task is to analyze a conversation and generate the same 6-section relationship health report as usual, but this is a COMPARISON reanalysis: compare the new conversation to the previous analysis provided and update the report accordingly.
+
+IMPORTANT: Return ONLY valid JSON - no additional text before or after.
+
+${comparisonInstruction}
+
+${
+  text
+    ? `Text conversation to analyze:
+"${text}"`
+    : 'Conversation screenshot provided as image below. Please extract and analyze all visible conversation content.'
+}
+
+Guidelines:
+- Use ONLY information from the conversation (text or image) and the provided previous analysis when deciding what changed.
+- Do not diagnose personalities or conditions.
+- Do not guess beyond what is shown.
+- Be objective and factual.
+- Scoring must be between 0-100.
+`;
+
+      const parts: any[] = [{ text: prompt }];
+
+      if (images && images.length) {
+        for (const img of images) {
+          if (img && img.buffer) {
+            parts.push(this.fileToGenerativePart(img.buffer, img.mimetype));
+          }
+        }
+      }
+
+      const result = await model.generateContent({
+        contents: [{ role: 'user', parts }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+        },
+      });
+
+      const responseText = result.response.text();
+      const analysis = JSON.parse(responseText);
+
+      // Validate structure
+      if (!analysis.relationshipHealthScore || !analysis.rolesAndTendencies) {
+        throw new InternalServerErrorException(
+          'Invalid analysis response structure from Gemini API.',
+        );
+      }
+
+      if (!analysis.relationshipHealthScore.totalScore) {
+        analysis.relationshipHealthScore.totalScore =
+          (analysis.relationshipHealthScore.positiveMarkersScore || 0) +
+          (analysis.relationshipHealthScore.negativeMarkersScore || 0) +
+          (analysis.relationshipHealthScore.conflictInsightsScore || 0) +
+          (analysis.relationshipHealthScore.rolesTendenciesScore || 0);
+      }
+
+      const report = analysis as AnalysisReport;
+
+      // Prefix the resultText to indicate this is a comparison update
+      const prefixedResultText =
+        `Comparison update (compared with history ${historyId}): ` +
+        this.formatReportText(report);
+
+      // Overwrite the existing history record (no new record should be created)
+      try {
+        await this.historyModel.findOneAndUpdate(
+          { _id: new Types.ObjectId(historyId), user: uid },
+          {
+            $set: {
+              report,
+              totalScore: report.relationshipHealthScore.totalScore,
+              sourceText: text,
+              resultText: prefixedResultText,
+            },
+          },
+          { new: true },
+        );
+      } catch (e) {
+        console.warn('Failed to update analysis history during reanalysis:', e);
+      }
+
+      // Send push if enabled
+      try {
+        const settings = await this.settingsModel.findOne({ user: uid }).lean();
+        if (settings?.pushEnabled) {
+          await this.sendPushNotification(uid as Types.ObjectId, {
+            title: 'Reanalysis Complete',
+            body: `Your reanalysis score: ${report.relationshipHealthScore.totalScore}`,
+            data: {
+              score: report.relationshipHealthScore.totalScore,
+              id: historyId,
+            },
+          });
+        }
+      } catch (e) {
+        console.warn('Push notification failed after reanalysis:', e);
+      }
+
+      return report;
+    } catch (error: any) {
+      console.error('Gemini API reanalysis error:', error);
+      if (error instanceof SyntaxError) {
+        throw new InternalServerErrorException(
+          'Failed to parse Gemini API response. The response was not valid JSON.',
+        );
+      }
+      if (error.status === 429) {
+        throw new InternalServerErrorException(
+          'Gemini API rate limit exceeded. Please try again later.',
+        );
+      }
+      if (error.status === 401 || error.status === 403) {
+        throw new InternalServerErrorException(
+          'Gemini API authentication failed. Invalid or expired API key.',
+        );
+      }
+      if (error.status >= 500) {
+        throw new InternalServerErrorException(
+          'Gemini API server error. Please try again later.',
+        );
+      }
+      throw new InternalServerErrorException(
+        'An error occurred during reanalysis. Please try again.',
       );
     }
   }

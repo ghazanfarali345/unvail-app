@@ -47,4 +47,6 @@ export class AnalysisReport {
   negativeMarkers: Marker[];
   conflictInsights: string;
   improvementTips: string[];
+  // Indicates this report was produced as a comparison reanalysis
+  isComparison?: boolean;
 }

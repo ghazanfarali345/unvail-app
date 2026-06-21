@@ -21,6 +21,7 @@ import {
 } from '@nestjs/swagger';
 import { AnalysisService } from './analysis.service';
 import { AnalyzeChatDto, AnalysisReport } from './dto/analyze-chat.dto';
+import { ReanalyzeDto } from './dto/reanalyze.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Express } from 'express';
 import { GetUser } from '../common/decorators/get-user.decorator';
@@ -67,6 +68,38 @@ export class AnalysisController {
     @UploadedFiles() images?: Express.Multer.File[],
   ): Promise<AnalysisReport> {
     return this.analysisService.analyzeChat(analyzeChatDto, images, user._id);
+  }
+
+  @Post('reanalyze')
+  @ApiOperation({
+    summary: 'Reanalyze new chat/images and compare with existing result',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        historyId: { type: 'string' },
+        text: { type: 'string' },
+        images: {
+          type: 'array',
+          items: { type: 'string', format: 'binary' },
+          maxItems: 4,
+        },
+      },
+    },
+  })
+  @UseInterceptors(FilesInterceptor('images', 4))
+  @ApiResponse({
+    status: 200,
+    description: 'Reanalyzed report (same shape as analyze response)',
+  })
+  async reanalyze(
+    @GetUser() user: any,
+    @Body() reanalyzeDto: ReanalyzeDto,
+    @UploadedFiles() images?: Express.Multer.File[],
+  ): Promise<AnalysisReport> {
+    return this.analysisService.reanalyzeChat(reanalyzeDto, images, user._id);
   }
 
   @Get('history')
