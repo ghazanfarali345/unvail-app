@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { AnalyzeChatDto, AnalysisReport } from './dto/analyze-chat.dto';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { ReanalyzeDto } from './dto/reanalyze.dto';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -40,7 +41,10 @@ export class AnalysisService {
     };
   }
 
-  private readonly reportStoragePath = path.resolve(process.cwd(), 'uploads', 'reports');
+  private readonly reportStoragePath = path.resolve(
+    process.env.REPORT_STORAGE_PATH || os.tmpdir(),
+    'unviel-reports',
+  );
 
   private async ensureReportStoragePath() {
     await fs.promises.mkdir(this.reportStoragePath, { recursive: true });
