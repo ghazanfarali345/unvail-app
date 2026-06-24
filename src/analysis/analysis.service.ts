@@ -2,9 +2,12 @@ import {
   Injectable,
   BadRequestException,
   InternalServerErrorException,
+  NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AnalyzeChatDto, AnalysisReport } from './dto/analyze-chat.dto';
+import * as fs from 'fs';
+import * as path from 'path';
 import { ReanalyzeDto } from './dto/reanalyze.dto';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { InjectModel } from '@nestjs/mongoose';
@@ -35,6 +38,12 @@ export class AnalysisService {
         mimeType,
       },
     };
+  }
+
+  private readonly reportStoragePath = path.resolve(process.cwd(), 'uploads', 'reports');
+
+  private async ensureReportStoragePath() {
+    await fs.promises.mkdir(this.reportStoragePath, { recursive: true });
   }
 
   async analyzeChat(
@@ -478,6 +487,13 @@ Guidelines:
     return `Score: ${score}. Roles: ${roles}. Positives: ${positives}. Negatives: ${negatives}. Tips: ${tips}`;
   }
 
+  private extractTipsFromResultText(resultText?: string): string | null {
+    if (!resultText) return null;
+    const match = resultText.match(/Tips:\s*(.*)$/s);
+    if (!match) return null;
+    return match[1].trim() || null;
+  }
+
   async setAverageDays(userId: string | Types.ObjectId, averageDays: number) {
     const uid =
       typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
@@ -493,7 +509,7 @@ Guidelines:
     const uid =
       typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
     const settings = await this.settingsModel.findOne({ user: uid }).lean();
-    const averageDays = settings?.averageDays ?? 7;
+    const averageDays = settings?.averageDays ?? 30;
     return { averageDays };
   }
 
@@ -518,6 +534,17 @@ Guidelines:
       ? scores.reduce((a, b) => a + b, 0) / scores.length
       : null;
 
+    const daySet = new Set(
+      records
+        .map((r) =>
+          r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : null,
+        )
+        .filter((d): d is string => Boolean(d)),
+    );
+    const activeDays = daySet.size;
+    const activeDaysPercent =
+      days > 0 ? Math.round((activeDays / days) * 100) : 0;
+
     const last = await this.historyModel
       .findOne({ user: uid })
       .sort({ createdAt: -1 })
@@ -526,8 +553,97 @@ Guidelines:
     return {
       averageDays: days,
       averageScore,
+      activeDays,
+      activeDaysPercent,
       lastAnalysisText: last?.resultText ?? null,
+      lastAnalysisTips: this.extractTipsFromResultText(last?.resultText),
       lastAnalysisAt: last?.createdAt ?? null,
+    };
+  }
+
+  async submitReport(
+    userId: string | Types.ObjectId,
+    historyId: string,
+    file: Express.Multer.File,
+  ) {
+    const uid =
+      typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    if (!historyId) {
+      throw new BadRequestException('historyId is required');
+    }
+    if (!file || !file.buffer) {
+      throw new BadRequestException('PDF file is required');
+    }
+    if (file.mimetype !== 'application/pdf') {
+      throw new BadRequestException('Only PDF files are allowed');
+    }
+
+    const historyEntry = await this.historyModel.findOne({
+      _id: new Types.ObjectId(historyId),
+      user: uid,
+    });
+
+    if (!historyEntry) {
+      throw new BadRequestException('Analysis history record not found');
+    }
+
+    await this.ensureReportStoragePath();
+
+    if (historyEntry.reportFilePath) {
+      try {
+        await fs.promises.unlink(historyEntry.reportFilePath);
+      } catch (e) {
+        // ignore missing old file
+      }
+    }
+
+    const fileName = `${historyId}-${Date.now()}.pdf`;
+    const filePath = path.join(this.reportStoragePath, fileName);
+    await fs.promises.writeFile(filePath, file.buffer);
+
+    historyEntry.reportFileName = file.originalname;
+    historyEntry.reportFileMimeType = file.mimetype;
+    historyEntry.reportFileSize = file.size;
+    historyEntry.reportFilePath = filePath;
+    historyEntry.reportSubmittedAt = new Date();
+
+    await historyEntry.save();
+
+    return {
+      ok: true,
+      historyId,
+      reportFileName: file.originalname,
+      reportFileSize: file.size,
+      reportSubmittedAt: historyEntry.reportSubmittedAt,
+    };
+  }
+
+  async getReportFile(userId: string | Types.ObjectId, historyId: string) {
+    const uid =
+      typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    if (!historyId) {
+      throw new BadRequestException('historyId is required');
+    }
+
+    const historyEntry = await this.historyModel.findOne({
+      _id: new Types.ObjectId(historyId),
+      user: uid,
+    });
+
+    if (!historyEntry || !historyEntry.reportFilePath) {
+      throw new NotFoundException('Report file not found');
+    }
+
+    try {
+      await fs.promises.access(historyEntry.reportFilePath);
+    } catch (e) {
+      throw new NotFoundException('Report file not found');
+    }
+
+    return {
+      reportFileName: historyEntry.reportFileName,
+      reportFileMimeType: historyEntry.reportFileMimeType,
+      reportFilePath: historyEntry.reportFilePath,
     };
   }
 
@@ -535,35 +651,48 @@ Guidelines:
     const uid =
       typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
 
+    const baseQuery = this.historyModel
+      .find({ user: uid })
+      .select('-reportFile -reportFileName -reportFileMimeType -reportFileSize');
+
+    const mapReportUrl = (entry: any) => {
+      const reportFileUrl = entry?.reportFilePath
+        ? `/analysis/report/${entry._id}`
+        : null;
+      const { reportFilePath, ...rest } = entry;
+      return {
+        ...rest,
+        reportFileUrl,
+      };
+    };
+
     switch (filter) {
       // Show all records sorted by newest first
-      case 'Latest':
-        return this.historyModel
-          .find({ user: uid })
-          .sort({ createdAt: -1 })
-          .lean();
+      case 'Latest': {
+        const records = await baseQuery.sort({ createdAt: -1 }).lean();
+        return records.map(mapReportUrl);
+      }
 
       // Sort by totalScore high -> low, then newest first
-      case 'High':
-        return this.historyModel
-          .find({ user: uid })
+      case 'High': {
+        const records = await baseQuery
           .sort({ totalScore: -1, createdAt: -1 })
           .lean();
+        return records.map(mapReportUrl);
+      }
 
       // Sort by totalScore low -> high, then newest first
-      case 'Low':
-        return this.historyModel
-          .find({ user: uid })
-          .sort({ totalScore: 1, createdAt: -1 })
-          .lean();
+      case 'Low': {
+        const records = await baseQuery.sort({ totalScore: 1, createdAt: -1 }).lean();
+        return records.map(mapReportUrl);
+      }
 
       // Default: return all records newest first
       case 'All':
-      default:
-        return this.historyModel
-          .find({ user: uid })
-          .sort({ createdAt: -1 })
-          .lean();
+      default: {
+        const records = await baseQuery.sort({ createdAt: -1 }).lean();
+        return records.map(mapReportUrl);
+      }
     }
   }
 

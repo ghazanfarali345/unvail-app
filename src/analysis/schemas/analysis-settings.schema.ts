@@ -14,7 +14,7 @@ export class AnalysisSettings {
   @Prop({ default: 30 })
   retentionDays: number;
 
-  @Prop({ default: 7 })
+  @Prop({ default: 30 })
   averageDays: number;
 
   @Prop({ default: true })

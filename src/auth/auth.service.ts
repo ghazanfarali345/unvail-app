@@ -28,7 +28,7 @@ export class AuthService {
     const { email, password, firstName, lastName, phone } = signupDto;
 
     const userExists = await this.userModel.findOne({ email });
-    
+
     // If user exists and email is verified, they already have a complete account
     if (userExists && userExists.isActive) {
       throw new ConflictException('User with this email already exists');
@@ -56,8 +56,9 @@ export class AuthService {
         console.error(`Failed to send verification email to ${email}:`, error);
       }
 
-      return { 
-        message: 'An account with this email exists but is not verified. Please check your email for the verification OTP.',
+      return {
+        message:
+          'An account with this email exists but is not verified. Please check your email for the verification OTP.',
         otp: process.env.NODE_ENV !== 'production' ? otp : undefined,
       };
     }
@@ -92,8 +93,9 @@ export class AuthService {
       console.error(`Failed to send signup email to ${email}:`, error);
     }
 
-    return { 
-      message: 'Registration successful. Please check your email for the verification OTP.',
+    return {
+      message:
+        'Registration successful. Please check your email for the verification OTP.',
       otp: process.env.NODE_ENV !== 'production' ? otp : undefined,
     };
   }
@@ -155,7 +157,12 @@ export class AuthService {
     const { email, otp } = verifyOtpDto;
     const user = await this.userModel.findOne({ email });
 
-    if (!user || !user.otpCode || !user.otpExpires || user.otpExpires < new Date()) {
+    if (
+      !user ||
+      !user.otpCode ||
+      !user.otpExpires ||
+      user.otpExpires < new Date()
+    ) {
       throw new BadRequestException('Invalid or expired OTP');
     }
 
@@ -177,7 +184,9 @@ export class AuthService {
     } else {
       // This is a password reset OTP verification
       await user.save();
-      return { message: 'OTP verified successfully. You can now reset your password.' };
+      return {
+        message: 'OTP verified successfully. You can now reset your password.',
+      };
     }
   }
 

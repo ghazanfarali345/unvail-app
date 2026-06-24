@@ -20,6 +20,21 @@ export class AnalysisHistory {
   @Prop()
   resultText?: string;
 
+  @Prop({ default: null })
+  reportFileName?: string;
+
+  @Prop({ default: null })
+  reportFileMimeType?: string;
+
+  @Prop({ default: null })
+  reportFileSize?: number;
+
+  @Prop({ default: null })
+  reportFilePath?: string;
+
+  @Prop({ default: null })
+  reportSubmittedAt?: Date;
+
   @Prop()
   createdAt?: Date;
 

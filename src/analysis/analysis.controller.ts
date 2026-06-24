@@ -4,12 +4,19 @@ import {
   Body,
   UseInterceptors,
   UploadedFiles,
+  UploadedFile,
   UseGuards,
   Get,
   Query,
   Delete,
+  Param,
+  Res,
+  NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
-import { FilesInterceptor } from '@nestjs/platform-express';
+import { FilesInterceptor, FileInterceptor } from '@nestjs/platform-express';
+import * as multer from 'multer';
+import * as fs from 'fs';
 import {
   ApiTags,
   ApiOperation,
@@ -23,7 +30,7 @@ import { AnalysisService } from './analysis.service';
 import { AnalyzeChatDto, AnalysisReport } from './dto/analyze-chat.dto';
 import { ReanalyzeDto } from './dto/reanalyze.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { Express } from 'express';
+import { Express, Response } from 'express';
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { HistoryFilterDto } from './dto/history-filter.dto';
 import { SaveHistoryDto } from './dto/save-history.dto';
@@ -100,6 +107,80 @@ export class AnalysisController {
     @UploadedFiles() images?: Express.Multer.File[],
   ): Promise<AnalysisReport> {
     return this.analysisService.reanalyzeChat(reanalyzeDto, images, user._id);
+  }
+
+  @Post('submit-report')
+  @ApiOperation({
+    summary:
+      'Submit or update a PDF report file for an analysis history record',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        historyId: { type: 'string' },
+        file: { type: 'string', format: 'binary' },
+      },
+      required: ['historyId', 'file'],
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: multer.memoryStorage(),
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (req, file, cb) => {
+        if (file.mimetype !== 'application/pdf') {
+          return cb(
+            new BadRequestException('Only PDF files are allowed'),
+            false,
+          );
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  @ApiResponse({
+    status: 200,
+    description:
+      'PDF report submitted and attached to the analysis history record',
+  })
+  async submitReport(
+    @GetUser() user: any,
+    @Body('historyId') historyId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.analysisService.submitReport(user._id, historyId, file);
+  }
+
+  @Get('report/:historyId')
+  @ApiOperation({ summary: 'Download the submitted PDF report for a history record' })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns the submitted PDF report file',
+  })
+  async downloadReport(
+    @GetUser() user: any,
+    @Param('historyId') historyId: string,
+    @Res() res: Response,
+  ) {
+    const report = await this.analysisService.getReportFile(
+      user._id,
+      historyId,
+    );
+    if (!report || !report.reportFilePath) {
+      throw new NotFoundException('Report file not found');
+    }
+
+    const fileBuffer = await fs.promises.readFile(report.reportFilePath);
+    const contentType = report.reportFileMimeType || 'application/pdf';
+    const fileName = report.reportFileName || 'report.pdf';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`,
+    );
+    res.send(fileBuffer);
   }
 
   @Get('history')
@@ -210,12 +291,17 @@ export class AnalysisController {
   })
   @ApiResponse({
     status: 200,
-    description: 'Dashboard data including averageScore and lastAnalysisText',
+    description:
+      'Dashboard data including averageScore, activeDays, activeDaysPercent, lastAnalysisText, and lastAnalysisTips',
     schema: {
       example: {
         averageDays: 7,
         averageScore: 78.25,
+        activeDays: 5,
+        activeDaysPercent: 71,
         lastAnalysisText: "Hey, I'm worried about our communication lately...",
+        lastAnalysisTips:
+          'Improve communication by listening actively, ask clarifying questions, and avoid blaming language.',
         lastAnalysisAt: '2026-06-12T12:34:56.000Z',
       },
     },
